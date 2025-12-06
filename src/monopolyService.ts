@@ -39,6 +39,10 @@
  * @date: Fall, 2025 (updated to JS->TS, Node version, master->main repo, added SQL injection examples)
  */
 
+
+import "dotenv/config"; 
+console.log("DEBUG:", process.env.DB_SERVER); 
+console.log("DEBUG PW:", process.env.DB_PASSWORD ? "SET" : "MISSING"); 
 import express from 'express';
 import pgPromise from 'pg-promise';
 
@@ -48,11 +52,12 @@ import type { Player, PlayerInput } from './player.js';
 
 // Set up the database
 const db = pgPromise()({
-    host: process.env.DB_SERVER,
-    port: parseInt(process.env.DB_PORT as string) || 5432,
-    database: process.env.DB_DATABASE,
-    user: process.env.DB_USER,
-    password: process.env.DB_PASSWORD,
+  host: process.env.DB_SERVER,
+  port: parseInt(process.env.DB_PORT as string) || 5432,
+  database: process.env.DB_DATABASE,
+  user: process.env.DB_USER,
+  password: process.env.DB_PASSWORD,
+  ssl: { rejectUnauthorized: false },
 });
 
 // Configure the server and its routes
@@ -67,6 +72,9 @@ router.get('/players/:id', readPlayer);
 router.put('/players/:id', updatePlayer);
 router.post('/players', createPlayer);
 router.delete('/players/:id', deletePlayer);
+router.get("/games", readGames);
+router.get("/games/:id", readGamePlayers);
+router.delete("/games/:id", deleteGame);
 
 // For testing only; vulnerable to SQL injection!
 // router.get('/bad/players/:id', readPlayerBad);
@@ -218,4 +226,42 @@ function deletePlayer(request: Request, response: Response, next: NextFunction):
         .catch((error: Error): void => {
             next(error);
         });
+}
+
+/**
+ * GET /games - Returns all games
+ */
+function readGames(_request: Request, response: Response, next: NextFunction): void {
+    db.manyOrNone('SELECT * FROM Game ORDER BY id')
+        .then((data: unknown[]): void => {
+            response.send(data);
+        })
+        .catch(next);
+}
+
+/**
+ * GET /games/:id - Returns players for game
+ */
+function readGamePlayers(request: Request, response: Response, next: NextFunction): void {
+    db.manyOrNone('SELECT p.id as playerid, p.name, pg.score FROM PlayerGame pg JOIN Player p ON pg.playerid = p.id WHERE pg.gameid = $1 ORDER BY pg.score DESC', [parseInt(request.params.id || '0')])
+        .then((data: unknown[]): void => {
+            response.send(data);
+        })
+        .catch(next);
+}
+
+/**
+ * DELETE /games/:id - Delete game + PlayerGame records
+ */
+function deleteGame(request: Request, response: Response, next: NextFunction): void {
+    db.tx((t) => {
+        return t.none('DELETE FROM PlayerGame WHERE gameid = $1', [parseInt(request.params.id || '0')])
+            .then(() => {
+                return t.oneOrNone('DELETE FROM Game WHERE id = $1 RETURNING *', [parseInt(request.params.id || '0')]);
+            });
+    })
+        .then((data: unknown | null): void => {
+            returnDataOr404(response, data);
+        })
+        .catch(next);
 }
